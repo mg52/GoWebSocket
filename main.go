@@ -9,6 +9,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var pool0 *Pool
+
 func serveWs(id int, pool *Pool, w http.ResponseWriter, r *http.Request) {
 	fmt.Println("WebSocket Endpoint Hit")
 	conn, err := Upgrade(w, r)
@@ -16,8 +18,6 @@ func serveWs(id int, pool *Pool, w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%+v\n", err)
 	}
 
-	//stringId := string(id)
-	//fmt.Println("Id: " + fmt.Sprintf())
 	client := &Client{
 		ID:   strconv.Itoa(id),
 		Conn: conn,
@@ -29,13 +29,13 @@ func serveWs(id int, pool *Pool, w http.ResponseWriter, r *http.Request) {
 }
 
 func setupRoutes() {
-	pool := NewPool()
-	go pool.Start()
+	currentId := -1
+	pool0 = NewPool(0)
+	go pool0.Start()
 
-	currentId := 0
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		currentId = currentId + 1
-		serveWs(currentId, pool, w, r)
+		serveWs(currentId, pool0, w, r)
 	})
 }
 
@@ -61,14 +61,16 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
 }
 
 type Pool struct {
+	Id         int
 	Register   chan *Client
 	Unregister chan *Client
 	Clients    map[*Client]bool
 	Broadcast  chan Message
 }
 
-func NewPool() *Pool {
+func NewPool(id int) *Pool {
 	return &Pool{
+		Id:         id,
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Clients:    make(map[*Client]bool),
@@ -99,13 +101,10 @@ func (c *Client) Read() {
 			log.Println(err)
 			return
 		}
-		message := Message{Type: messageType, Body: string(p)}
-		//c.Pool.Broadcast <- message
-		fmt.Printf("Message Received: %+v\n", message)
-		if err := c.Conn.WriteMessage(messageType, []byte("Hello single client")); err != nil {
-			log.Println(err)
-			return
-		}
+		fmt.Printf("Message \"%v\" received from User %s\n", string(p), c.ID)
+		message := Message{Type: messageType, Body: fmt.Sprintf("User %s says %v", c.ID, string(p))}
+
+		c.Pool.Broadcast <- message
 	}
 }
 
@@ -117,7 +116,11 @@ func (pool *Pool) Start() {
 			fmt.Println("Size of Connection Pool: ", len(pool.Clients))
 			for client, _ := range pool.Clients {
 				if currentClient.ID != client.ID {
+					// send message to other users except the new user
 					client.Conn.WriteJSON(Message{Type: 1, Body: "User " + currentClient.ID + " joined. Total user: " + fmt.Sprint(len(pool.Clients))})
+				} else {
+					// send message to the new user
+					client.Conn.WriteJSON(Message{Type: 1, Body: "Welcome User " + currentClient.ID + ". Total user: " + fmt.Sprint(len(pool.Clients))})
 				}
 			}
 		case currentClient := <-pool.Unregister:
